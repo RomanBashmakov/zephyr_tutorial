@@ -1,0 +1,12 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Remap compile_commands paths (Docker → Host)",
+            "type": "shell",
+            "command": "sed 's|/workdir|/Users/mac/Documents/My_Research/Tutorials/RTOS/Zephyr|g' ${workspaceFolder}/build/compile_commands.json > ${workspaceFolder}/build/compile_commands.local.json",
+            "problemMatcher": [],
+            "detail": "Создаёт локальную версию compile_commands с путями хоста для IntelliSense"
+        }
+    ]
+}

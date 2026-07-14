@@ -2,33 +2,24 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "STM32WB55 Debug (JLink + RTT)",
+            "name": "STM32WB Debug (OpenOCD)",
             "type": "cortex-debug",
             "request": "launch",
-            "servertype": "jlink",
-            "serverpath": "/Applications/SEGGER/JLink/JLinkGDBServerCLExe",
-            "device": "STM32WB55CG",
-            "interface": "swd",
-            "speed": 4000,
+            "servertype": "openocd",
+            "serverpath": "/usr/local/bin/openocd",
             "cwd": "${workspaceFolder}",
             "armToolchainPath": "/Applications/STM32CubeIDE.app/Contents/Eclipse/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.12.3.rel1.macos64_1.0.100.202403111906/tools/bin",
             "toolchainPrefix": "arm-none-eabi",
             "gdbPath": "/Applications/STM32CubeIDE.app/Contents/Eclipse/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.12.3.rel1.macos64_1.0.100.202403111906/tools/bin/arm-none-eabi-gdb",
             "executable": "${workspaceFolder}/build/zephyr/zephyr.elf",
+            "configFiles": [
+                "/usr/local/opt/open-ocd/share/openocd/scripts/interface/stlink.cfg",
+                "/usr/local/opt/open-ocd/share/openocd/scripts/target/stm32wbx.cfg"
+            ],
             "svdFile": "${workspaceFolder}/.vscode/STM32WB55_CM4.svd",
             "runToEntryPoint": "main",
             "showDevDebugOutput": "both",
-            "rttConfig": {
-                "enabled": true,
-                "address": "auto",
-                "decoders": [
-                    {
-                        "port": 0,
-                        "type": "console"
-                    }
-                ]
-            },
-            "preLaunchCommands": [
+              "preLaunchCommands": [
                 "set substitute-path /workdir/zephyr /Users/mac/Documents/My_Research/Tutorials/RTOS/Zephyr/zephyr",
                 "set substitute-path /workdir/modules /Users/mac/Documents/My_Research/Tutorials/RTOS/Zephyr/modules",
                 "set substitute-path /workdir/MY_PRJ /Users/mac/Documents/My_Research/Tutorials/RTOS/Zephyr/MY_PRJ"
