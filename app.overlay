@@ -4,3 +4,16 @@
  * Консоль переведена на SEGGER RTT (Channel 0).
  * USB CDC ACM узлы убраны, т.к. в prj.conf отключён USB device stack.
  */
+
+ / {
+    aliases {
+        led1 = &led1;   // только новый алиас, led0 не трогаем
+    };
+    leds {
+        // led0 не описываем — он уже есть в основном DTS
+        led1: led_1 {
+            gpios = <&gpiob 8 GPIO_ACTIVE_HIGH>;
+            label = "User LED 1";
+        };
+    };
+};
