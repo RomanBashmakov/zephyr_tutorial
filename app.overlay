@@ -7,13 +7,56 @@
 
  / {
     aliases {
-        led1 = &led1;   // только новый алиас, led0 не трогаем
+        led1 = &led1;       /* новый алиас, led0 не трогаем */
+        lora0 = &sx1272;    /* алиас для штатной подсистемы LoRa */
     };
     leds {
-        // led0 не описываем — он уже есть в основном DTS
+        /* led0 не описываем — он уже есть в основном DTS */
         led1: led_1 {
             gpios = <&gpiob 8 GPIO_ACTIVE_HIGH>;
             label = "User LED 1";
         };
+    };
+};
+
+/* ====================================================================== *
+ *  SX1272 LoRa трансивер на SPI1                                          *
+ *                                                                         *
+ *  Назначение пинов платы WeAct STM32WB55 Core:                           *
+ *    SCK  = PA5   (spi1_sck_pa5)                                          *
+ *    MISO = PB4   (spi1_miso_pb4)                                         *
+ *    MOSI = PB5   (spi1_mosi_pb5)                                         *
+ *    CS   = PA4   (программный CS через cs-gpios)                         *
+ *                                                                         *
+ *    RESET = PB3  (SX1272: активный высокий, open-drain)                  *
+ *                                                                         *
+ *  DIO пины (прерывания трансивера).                                      *
+ *  ВНИМАНИЕ: замените пины DIOx на те, что разведены на вашем             *
+ *  модуле SX1272. Для режима RXCONTINUOUS достаточно DIO0 (RxDone),       *
+ *  но binding требует указать минимум один; приведены 4 для               *
+ *  совместимости с драйвером loramac-node.                                *
+ * ====================================================================== */
+&spi1 {
+    pinctrl-0 = <&spi1_sck_pa5 &spi1_miso_pb4 &spi1_mosi_pb5>;
+    pinctrl-names = "default";
+    cs-gpios = <&gpioa 4 GPIO_ACTIVE_LOW>;
+    status = "okay";
+
+    sx1272: sx1272@0 {
+        compatible = "semtech,sx1272";
+        reg = <0>;
+        spi-max-frequency = <8000000>;
+        status = "okay";
+
+        /* SX1272: RESET активный высокий (open-drain) */
+        reset-gpios = <&gpiob 3 GPIO_ACTIVE_HIGH>;
+
+        /* DIO0..DIO3 — замените под разводку вашего модуля */
+        dio-gpios = <&gpioc 13 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>,
+                    <&gpioc 14 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>,
+                    <&gpioc 15 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>,
+                    <&gpioc 0  (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+
+        power-amplifier-output = "rfo";
     };
 };
