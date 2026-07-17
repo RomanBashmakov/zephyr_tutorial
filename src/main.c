@@ -12,7 +12,8 @@
  *      низкоуровневого API модуля loramac-node (struct Radio_s).
  *   4. Запускает непрерывный асинхронный приём (RXCONTINUOUS).
  *   5. Обрабатывает нажатие/отжатие механической кнопки (alias sw0)
- *      через GPIO-прерывания по обоим фронтам.
+ *      через GPIO-прерывания по обоим фронтам с программным
+ *      антидребезгом (debounce) на базе k_work_delayable.
  */
 
 #include <stdio.h>
@@ -50,16 +51,31 @@ BUILD_ASSERT(DT_NODE_HAS_STATUS_OKAY(LORA_NODE),
 	     "Проверьте app.overlay: узел sx1272 с compatible = \"semtech,sx1272\".");
 
 /* ------------------------------------------------------------------ *
- *  Механическая кнопка (alias sw0)                                    *
- *  Узел описан в app.overlay через compatible = "gpio-keys".          *
+ *  Механическая кнопка (alias sw0) + антидребезг                       *
+ *                                                                     *
+ *  sw0 берётся из базового DTS платы WeAct STM32WB55 Core:            *
+ *  кнопка BOOT на PH3 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN).            *
  * ------------------------------------------------------------------ */
 #define SW0_NODE DT_ALIAS(sw0)
 BUILD_ASSERT(DT_NODE_HAS_STATUS_OKAY(SW0_NODE),
 	     "Не найден узел кнопки (alias sw0) в devicetree. "
-	     "Проверьте app.overlay: узел gpio-keys.");
+	     "Проверьте DTS платы: узел gpio-keys с алиасом sw0.");
 
 static const struct gpio_dt_spec button = GPIO_DT_SPEC_GET(SW0_NODE, gpios);
 static struct gpio_callback button_cb_data;
+
+/* Период антидребезга (мс): после последнего прерывания ждём это время,
+ * прежде чем зафиксировать стабильное состояние. Дребезг механических
+ * контактов обычно утихает за 5–20 мс.
+ */
+#define BUTTON_DEBOUNCE_MS  20
+
+/* Отложенная работа для антидребезга. ISR только перепланирует таймер,
+ * а само чтение пина и логирование выполняются в контексте workqueue.
+ * k_work_reschedule() сдвигает таймер при каждом новом импульсе, поэтому
+ * серия дребезга схлопывается в одно итоговое событие.
+ */
+static struct k_work_delayable button_debounce_work;
 
 LOG_MODULE_REGISTER(main, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -108,19 +124,15 @@ static void on_lora_packet_recv(const struct device *dev, uint8_t *data,
 }
 
 /* ------------------------------------------------------------------ *
- *  Callback прерывания GPIO кнопки                                    *
+ *  Обработчик отложенной работы (антидребезг)                         *
  *                                                                     *
- *  Срабатывает по обоим фронтам (GPIO_INT_EDGE_BOTH).                 *
- *  gpio_pin_get_dt() возвращает ЛОГИЧЕСКИЙ уровень с учётом флага     *
- *  GPIO_ACTIVE_LOW/HIGH из devicetree: 1 = кнопка активна (нажата),   *
- *  0 = неактивна (отжата).                                            *
+ *  Вызывается из workqueue спустя BUTTON_DEBOUNCE_MS после последнего  *
+ *  прерывания GPIO. К этому моменту дребезг уже утих, и можно         *
+ *  достоверно прочитать состояние пина.                               *
  * ------------------------------------------------------------------ */
-static void button_pressed(const struct device *dev, struct gpio_callback *cb,
-			   uint32_t pins)
+static void button_debounce_handler(struct k_work *work)
 {
-	ARG_UNUSED(dev);
-	ARG_UNUSED(cb);
-	ARG_UNUSED(pins);
+	ARG_UNUSED(work);
 
 	int val = gpio_pin_get_dt(&button);
 	if (val < 0) {
@@ -136,6 +148,25 @@ static void button_pressed(const struct device *dev, struct gpio_callback *cb,
 }
 
 /* ------------------------------------------------------------------ *
+ *  Callback прерывания GPIO кнопки (ISR)                              *
+ *                                                                     *
+ *  Срабатывает по обоим фронтам (GPIO_INT_EDGE_BOTH). Не читает пин   *
+ *  и не логирует напрямую — только перепланирует отложенную работу.   *
+ *  Каждый новый импульс дребезга сдвигает таймер, поэтому итоговое    *
+ *  чтение выполнится один раз после стабилизации контакта.            *
+ * ------------------------------------------------------------------ */
+static void button_pressed(const struct device *dev, struct gpio_callback *cb,
+			   uint32_t pins)
+{
+	ARG_UNUSED(dev);
+	ARG_UNUSED(cb);
+	ARG_UNUSED(pins);
+
+	/* Переносим тяжесть в контекст потока: чтение GPIO + логирование. */
+	k_work_reschedule(&button_debounce_work, K_MSEC(BUTTON_DEBOUNCE_MS));
+}
+
+/* ------------------------------------------------------------------ *
  *  Инициализация кнопки: вход + прерывания по обоим фронтам           *
  * ------------------------------------------------------------------ */
 static int button_setup(void)
@@ -147,7 +178,10 @@ static int button_setup(void)
 		return -ENODEV;
 	}
 
-	/* Настройка пина как входа (pull-up уже задан в devicetree) */
+	/* Инициализация отложенной работы для антидребезга */
+	k_work_init_delayable(&button_debounce_work, button_debounce_handler);
+
+	/* Настройка пина как входа (pull-down задан в DTS платы) */
 	ret = gpio_pin_configure_dt(&button, GPIO_INPUT);
 	if (ret < 0) {
 		LOG_ERR("gpio_pin_configure_dt() failed: %d", ret);
@@ -169,7 +203,8 @@ static int button_setup(void)
 		return ret;
 	}
 
-	LOG_INF("Кнопка готова: прерывания GPIO по обоим фронтам (нажатие/отжатие)");
+	LOG_INF("Кнопка готова: GPIO-прерывания по обоим фронтам + антидребезг %d мс",
+		BUTTON_DEBOUNCE_MS);
 	return 0;
 }
 
@@ -181,7 +216,7 @@ int main(void)
 
 	LOG_INF("Старт демо SX1272 по SPI (Zephyr LoRa subsystem)");
 
-	/* --- Инициализация механической кнопки (GPIO-прерывания) --- */
+	/* --- Инициализация механической кнопки (GPIO-прерывания + debounce) --- */
 	ret = button_setup();
 	if (ret < 0) {
 		LOG_ERR("Инициализация кнопки не удалась: %d", ret);
@@ -223,7 +258,7 @@ int main(void)
 	LOG_INF("Непрерывный приём (RXCONTINUOUS) запущен");
 
 	/* Основной поток спит; пакеты обрабатываются в callback через DIO0,
-	 * нажатия кнопки — в callback GPIO по прерыванию.
+	 * нажатия кнопки — в workqueue после антидребезга.
 	 */
 	while (1) {
 		k_sleep(K_SECONDS(10));
