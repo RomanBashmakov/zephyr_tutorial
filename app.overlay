@@ -3,6 +3,11 @@
 /*
  * Консоль переведена на SEGGER RTT (Channel 0).
  * USB CDC ACM узлы убраны, т.к. в prj.conf отключён USB device stack.
+ *
+ * Кнопка sw0 НЕ описывается здесь: алиас уже определён в базовом DTS
+ * платы WeAct STM32WB55 Core и указывает на boot_button (PH3,
+ * GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN). DT_ALIAS(sw0) в main.c получит
+ * именно эту кнопку.
  */
 
  / {

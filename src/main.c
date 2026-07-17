@@ -11,12 +11,15 @@
  *   3. Считывает ключевые регистры SX1272 напрямую через SPI с помощью
  *      низкоуровневого API модуля loramac-node (struct Radio_s).
  *   4. Запускает непрерывный асинхронный приём (RXCONTINUOUS).
+ *   5. Обрабатывает нажатие/отжатие механической кнопки (alias sw0)
+ *      через GPIO-прерывания по обоим фронтам.
  */
 
 #include <stdio.h>
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/lora.h>
+#include <zephyr/drivers/gpio.h>
 #include <zephyr/logging/log.h>
 
 /* Низкоуровневый API модуля loramac-node: Radio.Read()/Write() поверх SPI.
@@ -45,6 +48,18 @@
 BUILD_ASSERT(DT_NODE_HAS_STATUS_OKAY(LORA_NODE),
 	     "Не найден узел LoRa (alias lora0) в devicetree. "
 	     "Проверьте app.overlay: узел sx1272 с compatible = \"semtech,sx1272\".");
+
+/* ------------------------------------------------------------------ *
+ *  Механическая кнопка (alias sw0)                                    *
+ *  Узел описан в app.overlay через compatible = "gpio-keys".          *
+ * ------------------------------------------------------------------ */
+#define SW0_NODE DT_ALIAS(sw0)
+BUILD_ASSERT(DT_NODE_HAS_STATUS_OKAY(SW0_NODE),
+	     "Не найден узел кнопки (alias sw0) в devicetree. "
+	     "Проверьте app.overlay: узел gpio-keys.");
+
+static const struct gpio_dt_spec button = GPIO_DT_SPEC_GET(SW0_NODE, gpios);
+static struct gpio_callback button_cb_data;
 
 LOG_MODULE_REGISTER(main, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -92,6 +107,72 @@ static void on_lora_packet_recv(const struct device *dev, uint8_t *data,
 	LOG_HEXDUMP_INF(data, size, "payload");
 }
 
+/* ------------------------------------------------------------------ *
+ *  Callback прерывания GPIO кнопки                                    *
+ *                                                                     *
+ *  Срабатывает по обоим фронтам (GPIO_INT_EDGE_BOTH).                 *
+ *  gpio_pin_get_dt() возвращает ЛОГИЧЕСКИЙ уровень с учётом флага     *
+ *  GPIO_ACTIVE_LOW/HIGH из devicetree: 1 = кнопка активна (нажата),   *
+ *  0 = неактивна (отжата).                                            *
+ * ------------------------------------------------------------------ */
+static void button_pressed(const struct device *dev, struct gpio_callback *cb,
+			   uint32_t pins)
+{
+	ARG_UNUSED(dev);
+	ARG_UNUSED(cb);
+	ARG_UNUSED(pins);
+
+	int val = gpio_pin_get_dt(&button);
+	if (val < 0) {
+		LOG_ERR("Не удалось прочитать состояние кнопки: %d", val);
+		return;
+	}
+
+	if (val) {
+		LOG_INF("Кнопка нажата");
+	} else {
+		LOG_INF("Кнопка отжата");
+	}
+}
+
+/* ------------------------------------------------------------------ *
+ *  Инициализация кнопки: вход + прерывания по обоим фронтам           *
+ * ------------------------------------------------------------------ */
+static int button_setup(void)
+{
+	int ret;
+
+	if (!device_is_ready(button.port)) {
+		LOG_ERR("GPIO-устройство кнопки %s не готово", button.port->name);
+		return -ENODEV;
+	}
+
+	/* Настройка пина как входа (pull-up уже задан в devicetree) */
+	ret = gpio_pin_configure_dt(&button, GPIO_INPUT);
+	if (ret < 0) {
+		LOG_ERR("gpio_pin_configure_dt() failed: %d", ret);
+		return ret;
+	}
+
+	/* Прерывания по обоим фронтам: нажатие и отжатие */
+	ret = gpio_pin_interrupt_configure_dt(&button, GPIO_INT_EDGE_BOTH);
+	if (ret < 0) {
+		LOG_ERR("gpio_pin_interrupt_configure_dt() failed: %d", ret);
+		return ret;
+	}
+
+	/* Регистрация callback */
+	gpio_init_callback(&button_cb_data, button_pressed, BIT(button.pin));
+	ret = gpio_add_callback(button.port, &button_cb_data);
+	if (ret < 0) {
+		LOG_ERR("gpio_add_callback() failed: %d", ret);
+		return ret;
+	}
+
+	LOG_INF("Кнопка готова: прерывания GPIO по обоим фронтам (нажатие/отжатие)");
+	return 0;
+}
+
 int main(void)
 {
 	const struct device *const lora_dev = DEVICE_DT_GET(LORA_NODE);
@@ -99,6 +180,12 @@ int main(void)
 	int ret;
 
 	LOG_INF("Старт демо SX1272 по SPI (Zephyr LoRa subsystem)");
+
+	/* --- Инициализация механической кнопки (GPIO-прерывания) --- */
+	ret = button_setup();
+	if (ret < 0) {
+		LOG_ERR("Инициализация кнопки не удалась: %d", ret);
+	}
 
 	if (!device_is_ready(lora_dev)) {
 		LOG_ERR("LoRa-устройство %s не готово", lora_dev->name);
@@ -135,7 +222,9 @@ int main(void)
 	}
 	LOG_INF("Непрерывный приём (RXCONTINUOUS) запущен");
 
-	/* Основной поток спит; пакеты обрабатываются в callback через DIO0 */
+	/* Основной поток спит; пакеты обрабатываются в callback через DIO0,
+	 * нажатия кнопки — в callback GPIO по прерыванию.
+	 */
 	while (1) {
 		k_sleep(K_SECONDS(10));
 	}
