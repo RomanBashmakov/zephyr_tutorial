@@ -14,6 +14,7 @@
  *   5. Обрабатывает нажатие/отжатие механической кнопки (alias sw0)
  *      через GPIO-прерывания по обоим фронтам с программным
  *      антидребезгом (debounce) на базе k_work_delayable.
+ *   6. Зажигает светодиод led0 при нажатии кнопки и гаснет при отжатии.
  */
 
 #include <stdio.h>
@@ -63,6 +64,12 @@ BUILD_ASSERT(DT_NODE_HAS_STATUS_OKAY(SW0_NODE),
 
 static const struct gpio_dt_spec button = GPIO_DT_SPEC_GET(SW0_NODE, gpios);
 static struct gpio_callback button_cb_data;
+
+/* Светодиод led0 (синий User LED на PE4) — определён в базовом DTS платы.
+ * Зажигается при нажатии кнопки и гаснет при отжатии.
+ */
+#define LED0_NODE DT_ALIAS(led0)
+static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
 
 /* Период антидребезга (мс): после последнего прерывания ждём это время,
  * прежде чем зафиксировать стабильное состояние. Дребезг механических
@@ -141,8 +148,10 @@ static void button_debounce_handler(struct k_work *work)
 	}
 
 	if (val) {
+		gpio_pin_set_dt(&led, 1);
 		LOG_INF("Кнопка нажата");
 	} else {
+		gpio_pin_set_dt(&led, 0);
 		LOG_INF("Кнопка отжата");
 	}
 }
@@ -208,6 +217,26 @@ static int button_setup(void)
 	return 0;
 }
 
+/* ------------------------------------------------------------------ *
+ *  Инициализация светодиода led0: выход, погашен при старте           *
+ * ------------------------------------------------------------------ */
+static int led_setup(void)
+{
+	if (!device_is_ready(led.port)) {
+		LOG_ERR("GPIO-устройство светодиода %s не готово", led.port->name);
+		return -ENODEV;
+	}
+
+	int ret = gpio_pin_configure_dt(&led, GPIO_OUTPUT_INACTIVE);
+	if (ret < 0) {
+		LOG_ERR("Не удалось настроить светодиод: %d", ret);
+		return ret;
+	}
+
+	LOG_INF("Светодиод готов: зажигается по нажатию кнопки");
+	return 0;
+}
+
 int main(void)
 {
 	const struct device *const lora_dev = DEVICE_DT_GET(LORA_NODE);
@@ -215,6 +244,12 @@ int main(void)
 	int ret;
 
 	LOG_INF("Старт демо SX1272 по SPI (Zephyr LoRa subsystem)");
+
+	/* --- Инициализация светодиода (выход, погашен) --- */
+	ret = led_setup();
+	if (ret < 0) {
+		LOG_ERR("Инициализация светодиода не удалась: %d", ret);
+	}
 
 	/* --- Инициализация механической кнопки (GPIO-прерывания + debounce) --- */
 	ret = button_setup();
