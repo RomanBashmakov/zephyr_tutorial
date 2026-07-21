@@ -282,3 +282,120 @@ west build -b weact_stm32wb55_core --pristine
   - Кнопка → HID Enter: `button_debounce_handler()`
 - **`app.overlay`**: только LoRa (SX1272 на SPI1) + led1
   (BT-узел добавлять НЕ нужно — он в SoC dtsi)
+
+---
+
+## 14. ⚠️ BLE-устройство не определяется (диагностика)
+
+Если `bt_enable()` отрабатывает (лог `Bluetooth инициализирован`),
+реклама стартует (`Реклама запущена`), но устройство **не видно** в сканере
+ телефона/ПК — причина почти всегда на стороне **CPU2 (Cortex-M0+)**.
+
+### 14.1. Главная причина: прошивка CPU2 (Wireless Stack)
+
+STM32WB55 — двухъядерный: BLE-контроллер физически работает на **CPU2 (M0+)**,
+а Zephyr — на CPU1 (M4). Связь между ними — через IPCC/shared RAM
+(драйвер `ipm_stm32wb.c`).
+
+**WeAct STM32WB55 Core поставляется с «Full Stack» прошивкой CPU2**
+(полный стек ST, не-HCI), которая **НЕ совместима с Zephyr**.
+Её нужно заменить на **HCI Layer** прошивку.
+
+Симптомы «не той» прошивки CPU2:
+- `bt_enable()` не возвращает управление (висит) или
+  логирует таймаут `C2 unlocked` / `STM32WB_C2_LOCK_TIMEOUT`;
+- реклама не стартует;
+- устройство вообще не появляется в эфире.
+
+### 14.2. Какую прошивку заливать (зависит от версии Zephyr!)
+
+Сначала узнайте версию Zephyr: `west topdir` → в `zephyr/VERSION`.
+В этом проекте — **Zephyr 4.4.99** → нужен **STM32CubeWB 1.24.0**.
+
+| Версия Zephyr | STM32CubeWB | HCI-бинник                       |
+|---------------|-------------|----------------------------------|
+| 3.7           | 1.19.1      | `stm32wb5x_BLE_HCILayer*_fw.bin` |
+| 4.2           | 1.23.0      | `stm32wb5x_BLE_HCILayer*_fw.bin` |
+| 4.3+          | 1.24.0      | `stm32wb5x_BLE_HCILayer*_fw.bin` |
+
+> ⚠️ **Несовпадение версий** Zephyr-модуля `hal_stm32` и прошивки CPU2 —
+> одна из частых причин «не работает».
+> Проверьте: `modules/hal/stm32/lib/stm32wb/README.rst` → `Status: version vX.Y.Z`.
+
+### 14.3. Где взять бинник
+
+ST GitHub: `STM32CubeWB/Projects/STM32WB_Copro_Wireless_Binaries/STM32WB5x/`
+- `stm32wb5x_BLE_HCILayer_extended_fw.bin` — расширенная (рекомендуется)
+- `stm32wb5x_BLE_HCILayer_fw.bin` — базовая
+
+### 14.4. Как прошить CPU2
+
+**DFU НЕ ПОДХОДИТ для CPU2** — только внешний отладчик
+(ST-LINK/V2 или J-Link) на 4-пиновый SWD-разъём (P3).
+
+Через **STM32CubeProgrammer** (внешний SWD):
+```
+# Для STM32WB5x (1 MB), адрес зависит от типа бинника:
+BLE_HCILayer_extended → 0x080DB000
+BLE_HCILayer          → 0x080E1000
+FUS v2.1.0            → 0x080EE000
+```
+
+### 14.5. Включение отладочного лога HCI-драйвера
+
+В `prj.conf` (уже добавлено):
+```kconfig
+CONFIG_BT_HCI_DRIVER_LOG_LEVEL_DBG=y
+```
+После сборки в RTT Channel 1 появятся сообщения от `hci_ipm`:
+- `BleCmdBuffer: 0x...` / `EvtPool: ...` — размещение mailbox-буферов
+- `C2 unlocked` — CPU2 ответил (если этого нет → проблема с CPU2)
+- `Could not enable IPCC clock` / `Could not configure RF Wake up clock`
+  — проблема с тактированием (HSI48/LSE в DTS)
+- `-ETIMEDOUT` — таймаут ожидания готовности CPU2
+
+### 14.5.1. Расшифровка лога (подтверждённый случай)
+
+Реальный лог RTT при Full Stack на CPU2:
+```
+<dbg> hci_ipm.c2_reset: C2 unlocked                              ← CPU2 ответил ✅
+<dbg> hci_ipm.bt_ipm_setup: IPM Channel Setup Completed          ← ACI setup прошёл ✅
+<dbg> hci_ipm.bt_ipm_send: CMD: buf 0x20008500 type 1 len 4      ← Read Local Features (0x1003)
+<dbg> hci_ipm.bt_ipm_rx_thread: EVT: evtcode: 0x0f               ← Command Status (НЕ Complete!)
+<wrn> bt_hci_core: opcode 0x1003 status 0x01                      ← Unknown HCI Command!
+<err> main: Bluetooth init failed: -5                             ← -EIO
+```
+
+**Расшифровка**:
+- `0x1003` = `BT_HCI_OP_READ_LOCAL_FEATURES` (`hci_types.h:1107`)
+- `status 0x01` = `BT_HCI_ERR_UNKNOWN_CMD` (Unknown HCI Command)
+- `evtcode 0x0f` = Command Status (нужно было `0x0e` Command Complete)
+
+**Почему ACI проходит, а HCI — нет**: ST Full Stack понимает
+проприетарные **ACI-команды** (vendor-specific, `bt_ipm_setup` использует их
+для задания адреса/мощности), но **не понимает стандартные HCI-команды**
+Bluetooth. HCI Layer прошивка понимает и то, и другое.
+
+**Итог**: этот лог = 100% подтверждение, что на CPU2 залит
+**Full Stack** (или иная не-HCI прошивка), а не `BLE_HCILayer_extended`.
+
+### 14.6. Порядок диагностики
+
+1. **Включить** `CONFIG_BT_HCI_DRIVER_LOG_LEVEL_DBG=y` и пересобрать.
+2. Прошить CPU1, смотреть лог в RTT (Channel 1).
+3. Если **нет** `C2 unlocked` / есть `-ETIMEDOUT` → **проблема с CPU2**
+   (не прошит / не та версия / не тот тип — Full Stack вместо HCI).
+4. Проверить тактирование: `clk_hsi48` и `clk_lse` должны быть `okay`
+   (в `weact_stm32wb55_core.dts` они уже включены).
+5. Если `C2 unlocked` есть, реклама идёт, но не видно телефоном →
+   проверить антенну/распайку RF, либо конфликт пинов (см. 14.7).
+6. Прошить правильный `stm32wb5x_BLE_HCILayer_extended_fw.bin`
+   по адресу `0x080DB000` внешним SWD.
+
+### 14.7. Конфликт пинов (побочный)
+
+В `app.overlay` `led1` разведён на **PB8** (`gpios = <&gpiob 8 ...>`),
+а в базовом DTS платы PB8 занят `i2c1_scl_pb8` (I2C1 SCL).
+Это не ломает BLE напрямую, но: (а) I2C1 и led1 нельзя использовать
+одновременно; (б) при инициализации I2C пин перехватится.
+Если I2C не нужен — отключите `&i2c1 { status = "disabled"; }` в overlay.
