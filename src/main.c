@@ -2,9 +2,7 @@
  * Copyright (c) 2016 Intel Corporation
  * SPDX-License-Identifier: Apache-2.0
  *
- * Демонстрация совмещённой работы:
- *   1. LoRa-трансивер SX1272 по SPI (Zephyr LoRa subsystem).
- *   2. Bluetooth LE HID-клавиатуры "stm32_button".
+ * Демонстрация Bluetooth LE HID-клавиатуры "stm32_button".
  *
  * По нажатию механической кнопки (sw0 / BOOT на PH3):
  *   - зажигается светодиод led0;
@@ -13,7 +11,6 @@
  *
  * Логика разнесена по модулям:
  *   - ble.c    — Bluetooth LE HID-клавиатура;
- *   - sx1272.c — LoRa-модем SX1272 (конфигурация + RXCONTINUOUS);
  *   - button.c — кнопка (sw0) + светодиод (led0) + антидребезг.
  *
  * Имя Bluetooth-устройства задаётся в prj.conf:
@@ -30,7 +27,6 @@
 #include <zephyr/logging/log.h>
 
 #include "ble.h"
-#include "sx1272.h"
 #include "button.h"
 
 LOG_MODULE_REGISTER(main, CONFIG_LOG_DEFAULT_LEVEL);
@@ -39,8 +35,7 @@ int main(void)
 {
 	int ret;
 
-	LOG_INF("Старт: LoRa SX1272 + BLE HID \"%s\"",
-		CONFIG_BT_DEVICE_NAME);
+	LOG_INF("Старт: BLE HID \"%s\"", CONFIG_BT_DEVICE_NAME);
 
 	/* --- Кнопка + светодиод (вызывает hid_send_key из BLE) --- */
 	ret = button_init();
@@ -61,14 +56,8 @@ int main(void)
 		LOG_ERR("Инициализация Bluetooth не удалась: %d", ret);
 	}
 
-	/* --- LoRa --- */
-	ret = sx1272_init();
-	if (ret < 0) {
-		LOG_ERR("Инициализация LoRa не удалась: %d", ret);
-	}
-
-	/* Основной поток спит; пакеты LoRa обрабатываются в callback,
-	 * нажатия кнопки — в workqueue + HID-notify по Bluetooth.
+	/* Основной поток спит; нажатия кнопки обрабатываются в workqueue
+	 * и отправляются как HID-notify по Bluetooth.
 	 */
 	while (1) {
 		k_sleep(K_SECONDS(10));

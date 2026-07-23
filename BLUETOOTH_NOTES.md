@@ -245,11 +245,7 @@ bt_le_adv_start(BT_LE_ADV_CONN_FAST_1,
 5. **`CONFIG_BT_DEVICE_NAME`**: Если менять имя, могут быть проблемы
    с кэшированием у хоста. Можно включить `CONFIG_BT_DEVICE_NAME_GATT_WRITABLE`.
 
-6. **IntelliSense VS Code**: Появляются ошибки про `radio.h` —
-   это нормально, путь настраивается в `CMakeLists.txt`, а не в `.vscode/`.
-   Реальная сборка через `west build` работает корректно.
-
-7. **⚠️ Bus Fault с CONFIG_SETTINGS / CONFIG_NVS**: При включении
+6. **⚠️ Bus Fault с CONFIG_SETTINGS / CONFIG_NVS**: При включении
    `CONFIG_BT_SETTINGS` + `CONFIG_SETTINGS` + `CONFIG_NVS` во время
    `bt_enable()` возникает **Bus Fault** (Precise data bus error, BFAR=0x080D8FF8).
    Причина: `storage_partition` в DTS платы использует
@@ -275,12 +271,12 @@ west build -b weact_stm32wb55_core --pristine
 
 ## 13. Текущее состояние проекта
 
-- **`prj.conf`**: LoRa + BLE HID (BT-секция в конце)
-- **`src/main.c`**: LoRa + BLE HID клавиатура
-  - BT-код: строки 89–300 (примерно)
-  - LoRa-код: `sx1272_dump_registers()`, `on_lora_packet_recv()`
+- **`prj.conf`**: BLE HID (консоль RTT + Bluetooth-секция)
+- **`src/main.c`**: BLE HID клавиатура
+  - `button_init()` → кнопки + светодиод
+  - `ble_init()` → Bluetooth LE HID
   - Кнопка → HID Enter: `button_debounce_handler()`
-- **`app.overlay`**: только LoRa (SX1272 на SPI1) + led1
+- **`app.overlay`**: кнопки sw1/sw2 + led1, освобождение PA0/PA1
   (BT-узел добавлять НЕ нужно — он в SoC dtsi)
 
 ---
