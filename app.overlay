@@ -11,11 +11,31 @@
  */
 
  / {
-    aliases {
-        led1 = &led1;       /* новый алиас, led0 не трогаем */
-        lora0 = &sx1272;    /* алиас для штатной подсистемы LoRa */
-    };
-    leds {
+     aliases {
+         led1 = &led1;       /* новый алиас, led0 не трогаем */
+         sw1 = &sw1;         /* кнопка Copy (Ctrl+C)  на PB6 */
+         sw2 = &sw2;         /* кнопка Paste (Ctrl+V) на PB7 */
+         lora0 = &sx1272;    /* алиас для штатной подсистемы LoRa */
+     };
+     /*
+      * Две дополнительные кнопки sw1/sw2 (gpio-keys).
+      * sw0 уже определён в базовом DTS платы (boot_button PH3).
+      *
+      * PB6/PB7 выбраны т.к. их EXTI-линии (6,7) гарантированно свободны
+      * (EXTI0/1 на PA0/PA1 заняты ADC/wkup-pin и вызывают -EBUSY).
+      */
+     buttons {
+         compatible = "gpio-keys";
+         sw1: button_1 {
+             gpios = <&gpiob 6 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>;
+             label = "Copy Button (Ctrl+C)";
+         };
+         sw2: button_2 {
+             gpios = <&gpiob 7 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>;
+             label = "Paste Button (Ctrl+V)";
+         };
+     };
+     leds {
         /* led0 не описываем — он уже есть в основном DTS */
         led1: led_1 {
             gpios = <&gpiob 8 GPIO_ACTIVE_HIGH>;
@@ -23,6 +43,27 @@
         };
     };
 };
+
+/* ====================================================================== *
+ *  Освобождаем PA0/PA1 от ADC1 и wkup-pins                                *
+ *                                                                         *
+ *  В базовом DTS платы PA0/PA1 настроены как аналоговые входы ADC1.        *
+ *  Также PA0/EXTI0 занят wkup-pin@1 (wakeup из sleep), что вызывает        *
+ *  -EBUSY при настройке прерываний GPIO.                                   *
+ *  Отключаем ADC1 и удаляем wkup-pins, освобождая PA0/PA1.                 *
+ * ====================================================================== */
+&adc1 {
+    status = "disabled";
+    /delete-property/ pinctrl-0;
+    /delete-property/ pinctrl-names;
+};
+
+/* Отключаем wakeup-pins на PA0 (wkup-pin@1, EXTI0) и PA2 (wkup-pin@4, EXTI2),
+ * чтобы освободить EXTI-линии для прерываний GPIO кнопок.
+ * Узлы wkup-pin не имеют label, обращаемся по полному пути.
+ */
+&{/soc/power@58000400/wkup-pin@1} { status = "disabled"; };
+&{/soc/power@58000400/wkup-pin@4} { status = "disabled"; };
 
 /* ====================================================================== *
  *  SX1272 LoRa трансивер на SPI1                                          *

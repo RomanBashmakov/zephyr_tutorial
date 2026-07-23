@@ -4,7 +4,11 @@ cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(blinky)
 
-target_sources(app PRIVATE src/main.c)
+target_sources(app PRIVATE
+    src/main.c
+    src/ble.c
+    src/sx1272.c
+    src/button.c)
 
 # Доступ к низкоуровневому API модуля loramac-node (radio.h: struct Radio_s)
 # для прямого чтения/записи регистров SX1272 по SPI.
