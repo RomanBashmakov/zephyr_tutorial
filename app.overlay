@@ -51,11 +51,11 @@
  *  -EBUSY при настройке прерываний GPIO.                                   *
  *  Отключаем ADC1 и удаляем wkup-pins, освобождая PA0/PA1.                 *
  * ====================================================================== */
-&adc1 {
-    status = "disabled";
-    /delete-property/ pinctrl-0;
-    /delete-property/ pinctrl-names;
-};
+ &adc1 {
+     status = "disabled";
+     /delete-property/ pinctrl-0;
+     /delete-property/ pinctrl-names;
+ };
 
 /* Отключаем wakeup-pins на PA0 (wkup-pin@1, EXTI0) и PA2 (wkup-pin@4, EXTI2),
  * чтобы освободить EXTI-линии для прерываний GPIO кнопок.
@@ -63,3 +63,21 @@
  */
 &{/soc/power@58000400/wkup-pin@1} { status = "disabled"; };
 &{/soc/power@58000400/wkup-pin@4} { status = "disabled"; };
+
+/* ====================================================================== *
+ *  Отключение неиспользуемой периферии для снижения энергопотребления    *
+ *                                                                         *
+ *  Каждый активный узел в SoC dtsi тактируется и потребляет ток          *
+ *  даже в idle. Отключаем всё, что не используется приложением:          *
+ *    - i2c1  (конфликтует с led1 на PB8, не используется)                *
+ *    - usart1 (консоль переведена на RTT, UART не нужен)                 *
+ *    - spi1/spi2 (не используются)                                       *
+ *                                                                       *
+ *  Примечание: USB device stack (usbus) в DTS платы WeAct отсутствует,  *
+ *  поэтому отдельного узла usbus для отключения нет — USB и так не      *
+ *  активируется, пока не включён CONFIG_USB_DEVICE_STACK в prj.conf.    *
+ * ====================================================================== */
+&i2c1   { status = "disabled"; };
+&usart1 { status = "disabled"; };
+&spi1   { status = "disabled"; };
+&spi2   { status = "disabled"; };
