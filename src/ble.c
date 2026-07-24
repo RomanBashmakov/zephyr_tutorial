@@ -271,30 +271,6 @@ static const struct bt_data sd[] = {
 static void adv_restart_work_handler(struct k_work *work);
 K_WORK_DELAYABLE_DEFINE(adv_restart_work, adv_restart_work_handler);
 
-/* Work для отложенного запроса connection parameter update.
- * connected() выполняется в RX-потоке HCI, поэтому bt_conn_le_param_update()
- * нельзя вызывать напрямую — делегируем в system workqueue.
- *
- * Энергоэффективные параметры (большой interval + slave latency) позволяют
- * радио (CPU2) проводить больше времени в сне между connection events.
- * Задержка 1 сек: iOS/macOS требуют паузы после подключения перед CU.
- */
-static void conn_param_update_handler(struct k_work *work);
-K_WORK_DELAYABLE_DEFINE(conn_param_update_work, conn_param_update_handler);
-
-/* Энергоэффективные параметры подключения (должны быть согласованы с
- * CONFIG_BT_PERIPHERAL_PREF_* в prj.conf).
- *   interval 80 = 100 мс
- *   latency  10 → радио активно каждые ~1 сек
- *   timeout 400 = 4 сек supervision
- */
-static const struct bt_le_conn_param low_power_conn_param = {
-	.interval_min = 80,
-	.interval_max = 80,
-	.latency      = 10,
-	.timeout      = 400,
-};
-
 static void adv_restart_work_handler(struct k_work *work)
 {
 	ARG_UNUSED(work);
@@ -311,26 +287,6 @@ static void adv_restart_work_handler(struct k_work *work)
 		LOG_ERR("Перезапуск рекламы не удался: %d", err);
 	} else {
 		LOG_INF("Реклама перезапущена");
-	}
-}
-
-static void conn_param_update_handler(struct k_work *work)
-{
-	ARG_UNUSED(work);
-
-	if (default_conn == NULL) {
-		return;
-	}
-
-	/* Запрашиваем энергоэффективные параметры, чтобы радио CPU2 спало
-	 * между connection events. Дублирует CONFIG_BT_PERIPHERAL_PREF_*,
-	 * но гарантирует обновление, даже если хост не прислал CU-запрос.
-	 */
-	int err = bt_conn_le_param_update(default_conn, &low_power_conn_param);
-	if (err) {
-		LOG_WRN("Connection param update failed: %d", err);
-	} else {
-		LOG_INF("Запрошены энергоэффективные параметры conn");
 	}
 }
 
@@ -355,11 +311,6 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	if (bt_conn_set_security(conn, BT_SECURITY_L2)) {
 		LOG_WRN("Не удалось задать уровень безопасности");
 	}
-
-	/* Планируем запрос энергоэффективных connection parameters.
-	 * iOS/macOS требуют задержки ~1 сек после подключения.
-	 */
-	k_work_reschedule(&conn_param_update_work, K_SECONDS(1));
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
@@ -372,9 +323,6 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 		default_conn = NULL;
 		hid_notify_enabled = false;
 	}
-
-	/* Отменяем отложенный conn param update, если ещё не сработал. */
-	k_work_cancel_delayable(&conn_param_update_work);
 
 	/* Перезапускаем рекламу с задержкой, чтобы выполнить вызов вне
 	 * контекста RX-потока HCI (иначе bt_le_adv_start() падает с -ENOMEM).
@@ -414,6 +362,10 @@ static void bt_ready(int err)
 	 *   "No ID address. App must call settings_load()".
 	 * Обработчики настроек BT регистрируются внутри bt_enable(), поэтому
 	 * settings_load() вызываем здесь, в bt_ready(), ДО старта рекламы.
+	 *
+	 * На STM32WB55 HCI-драйвер IPM сам предоставляет public-адрес от CPU2
+	 * (видно в логе: "Identity: 80:E1:26:CC:A3:25 (public)"), поэтому
+	 * bt_id_create() НЕ нужен — он конфликтует с адресом от HCI-драйвера.
 	 */
 	if (IS_ENABLED(CONFIG_BT_SETTINGS)) {
 		int sret = settings_load();

@@ -17,17 +17,6 @@
          sw2 = &sw2;         /* кнопка Paste (Ctrl+V) на PB7 */
      };
 
-     chosen {
-         /*
-          * LPTIM1 (на LSE 32768 Гц) — low-power companion для SysTick.
-          * SysTick не работает в STOP0/1/2, поэтому при входе в STOP
-          * хронометрирование передаётся LPTIM1, а после пробуждения
-          * разница во времени добавляется к cycle_count ядра.
-          * Без этого ядро "теряет" время, проведённое в STOP.
-          * Узел stm32_lp_tick_source = &lptim1 уже определён в DTS платы.
-          */
-         zephyr,system-timer-companion = <&lptim1>;
-     };
 
      /*
       * Две дополнительные кнопки sw1/sw2 (gpio-keys).
