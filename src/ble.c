@@ -249,6 +249,17 @@ BT_GATT_SERVICE_DEFINE(hids_svc,
  *  Advertising и callbacks подключения                                *
  * ------------------------------------------------------------------ */
 
+/* Медленная реклама для снижения энергопотребления.
+ * BT_LE_ADV_CONN_FAST_1 рекламирует каждые 30-60 мс — радио активно часто.
+ * Медленный режим: интервал ~1.0-1.2 сек → радио просыпается редко.
+ * Для HID-клавиатуры это допустимо: подключение займёт ~1 сек вместо ~30 мс.
+ */
+#define BT_LE_ADV_CONN_LOW_POWER \
+	BT_LE_ADV_PARAM(BT_LE_ADV_OPT_CONN, \
+			BT_GAP_ADV_SLOW_INT_MIN, \
+			BT_GAP_ADV_SLOW_INT_MAX, \
+			NULL)
+
 /* Advertising data: флаги LE + UUID HID-сервиса (0x1812). */
 static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS,
@@ -280,7 +291,7 @@ static void adv_restart_work_handler(struct k_work *work)
 		return;
 	}
 
-	int err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1,
+	int err = bt_le_adv_start(BT_LE_ADV_CONN_LOW_POWER,
 				  ad, ARRAY_SIZE(ad),
 				  sd, ARRAY_SIZE(sd));
 	if (err) {
@@ -362,10 +373,6 @@ static void bt_ready(int err)
 	 *   "No ID address. App must call settings_load()".
 	 * Обработчики настроек BT регистрируются внутри bt_enable(), поэтому
 	 * settings_load() вызываем здесь, в bt_ready(), ДО старта рекламы.
-	 *
-	 * На STM32WB55 HCI-драйвер IPM сам предоставляет public-адрес от CPU2
-	 * (видно в логе: "Identity: 80:E1:26:CC:A3:25 (public)"), поэтому
-	 * bt_id_create() НЕ нужен — он конфликтует с адресом от HCI-драйвера.
 	 */
 	if (IS_ENABLED(CONFIG_BT_SETTINGS)) {
 		int sret = settings_load();
@@ -375,7 +382,7 @@ static void bt_ready(int err)
 	}
 
 	/* Запускаем рекламу: подключаемую (CONNECTABLE) + scan response. */
-	err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1,
+	err = bt_le_adv_start(BT_LE_ADV_CONN_LOW_POWER,
 			      ad, ARRAY_SIZE(ad),
 			      sd, ARRAY_SIZE(sd));
 	if (err) {
