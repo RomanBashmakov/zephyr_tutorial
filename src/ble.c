@@ -122,6 +122,9 @@ static bool hid_notify_enabled;
 /* Активное подключение (для bt_gatt_notify). */
 static struct bt_conn *default_conn;
 
+/* Флаг режима сна: блокирует перезапуск рекламы в disconnected(). */
+static bool is_sleeping;
+
 /* Разрешения: HID требует шифрованного канала, но не обязательно
  * аутентифицированного. Используем READ_ENCRYPT/WRITE_ENCRYPT,
  * чтобы не усложнять спаривание (Just Works).
@@ -338,6 +341,11 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	/* Перезапускаем рекламу с задержкой, чтобы выполнить вызов вне
 	 * контекста RX-потока HCI (иначе bt_le_adv_start() падает с -ENOMEM).
 	 */
+	/* Не перезапускаем рекламу, если устройство в режиме сна. */
+	if (is_sleeping) {
+		return;
+	}
+
 	k_work_reschedule(&adv_restart_work, K_MSEC(20));
 }
 
@@ -416,6 +424,60 @@ void hid_send_key(uint8_t modifier, uint8_t hid_key)
 				 &keyboard_state, sizeof(keyboard_state));
 	if (err) {
 		LOG_WRN("bt_gatt_notify() failed: %d", err);
+	}
+}
+
+void ble_sleep(void)
+{
+	/* Устанавливаем флаг сна ДО disconnect, чтобы disconnected()
+	 * callback не запустил рекламу заново.
+	 */
+	is_sleeping = true;
+
+	/* Отключаем активное подключение, если есть.
+	 * Радио CPU2 работает пока есть conn, поэтому рвём его.
+	 * disconnected() callback сработает, но не перезапустит рекламу
+	 * из-за флага is_sleeping.
+	 */
+	if (default_conn) {
+		bt_conn_disconnect(default_conn,
+				   BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+	}
+
+	/* Отменяем отложенный перезапуск рекламы (если был запланирован). */
+	k_work_cancel_delayable(&adv_restart_work);
+
+	/* Останавливаем рекламу — радио CPU2 прекращает передачу пакетов.
+	 * Это основной источник экономии тока в режиме сна.
+	 */
+	int err = bt_le_adv_stop();
+	if (err) {
+		LOG_ERR("bt_le_adv_stop() failed: %d", err);
+	} else {
+		LOG_INF("BLE засыпает: реклама остановлена");
+	}
+}
+
+void ble_wake(void)
+{
+	/* Сбрасываем флаг сна. */
+	is_sleeping = false;
+
+	if (default_conn != NULL) {
+		return;
+	}
+
+	/* Запускаем рекламу. Быстрый режим (FAST_1) для быстрого
+	 * переподключения. После подключения хост применит медленные
+	 * параметры из CONFIG_BT_PERIPHERAL_PREF_*.
+	 */
+	int err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1,
+				  ad, ARRAY_SIZE(ad),
+				  sd, ARRAY_SIZE(sd));
+	if (err) {
+		LOG_ERR("bt_le_adv_start() failed: %d", err);
+	} else {
+		LOG_INF("BLE проснулся: реклама запущена");
 	}
 }
 

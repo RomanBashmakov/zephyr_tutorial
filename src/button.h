@@ -24,4 +24,5 @@
  */
 int button_init(void);
 
+void button_set_activity_callback(void (*callback)(void));
 #endif /* BUTTON_H */

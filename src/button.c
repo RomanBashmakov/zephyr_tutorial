@@ -82,6 +82,9 @@ static struct button_config buttons[] = {
 /* Светодиод led0 — зажигается при нажатии любой кнопки. */
 static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
 
+/* Callback активности: вызывается при каждом нажатии (для сброса таймера сна). */
+static void (*activity_callback)(void);
+
 /* ------------------------------------------------------------------ *
  *  Обработка нажатий (антидребезг + отправка HID)                     *
  * ------------------------------------------------------------------ */
@@ -104,6 +107,10 @@ static void button_debounce_handler(struct k_work *work)
 		LOG_INF("[%s] нажата -> HID modifier=0x%02x key=0x%02x",
 			btn->name, btn->modifier, btn->hid_key);
 		hid_send_key(btn->modifier, btn->hid_key);
+		/* Уведомляем main() о активности для сброса таймера сна. */
+		if (activity_callback) {
+			activity_callback();
+		}
 	} else {
 		gpio_pin_set_dt(&led, 0);
 		LOG_INF("[%s] отжата -> HID release", btn->name);
@@ -200,6 +207,11 @@ static int led_setup(void)
 
 	LOG_INF("Светодиод готов: зажигается по нажатию любой кнопки");
 	return 0;
+}
+
+void button_set_activity_callback(void (*callback)(void))
+{
+	activity_callback = callback;
 }
 
 int button_init(void)
